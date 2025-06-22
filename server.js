@@ -1,9 +1,10 @@
+import dotenv from 'dotenv';
+dotenv.config();
+
 import express from 'express';
 import cors from 'cors';
-import dotenv from 'dotenv';
 import OpenAI from 'openai';
-
-dotenv.config();
+import nodemailer from 'nodemailer';
 
 const app = express();
 app.use(cors());
@@ -13,23 +14,13 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-// Productos con datos y escala para imagen
-const productos = {
-  "Supernova 18": {
-    nombre: "Supernova 18",
-    precio: "999€",
-    url: "https://www.zoombikes.es/supernova-18",
-    imagen: "https://cdn.prod.website-files.com/67bf93ba4c3b33d64e3d383c/6834513dc55b8043121c3e71_fc9acf18-47e0-4a38-9603-100ca7a8ab6b%20(1).png",
-    scale: 0.85
-  },
-  "Supernova 20": {
-    nombre: "Supernova 20",
-    precio: "1299€",
-    url: "https://www.zoombikes.es/supernova-20",
-    imagen: "https://cdn.prod.website-files.com/67bf93ba4c3b33d64e3d383c/6834513dc55b8043121c3e71_fc9acf18-47e0-4a38-9603-100ca7a8ab6b%20(1).png",
-    scale: 1
+const transporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS
   }
-};
+});
 
 const SYSTEM_PROMPT = `Eres un asistente experto en bicicletas eléctricas infantiles de la marca ZoomBikes, específicamente en el modelo Supernova. Solo respondes preguntas relacionadas con las bicicletas Supernova, sus características técnicas, tamaños, precios, formas de pago, garantía, envíos y devoluciones.
 
@@ -54,9 +45,24 @@ Si alguien pregunta algo fuera de estos temas, responde amablemente que solo pue
 
 Responde con claridad, precisión y un tono cercano, amigable y profesional.`;
 
-// Memoria simple de conversaciones por sesión
 const conversations = {};
 const MAX_MESSAGES = 10;
+
+async function enviarEmail(texto, asunto) {
+  const mailOptions = {
+    from: `"Chatbot Supernova" <${process.env.EMAIL_USER}>`,
+    to: process.env.EMAIL_USER,
+    subject: asunto,
+    text: texto
+  };
+
+  try {
+    await transporter.sendMail(mailOptions);
+    console.log('Email enviado correctamente');
+  } catch (error) {
+    console.error('Error enviando email:', error);
+  }
+}
 
 app.post('/chat', async (req, res) => {
   const { message, sessionId = 'default' } = req.body;
@@ -79,12 +85,27 @@ app.post('/chat', async (req, res) => {
       messages: conversations[sessionId],
     });
 
-    let reply = completion.choices[0].message.content;
+    const reply = completion.choices[0].message.content;
 
-    // Detectar si menciona Supernova 18 o 20 para enviar tarjeta
+    // Detectar productos mencionados para enviar tarjeta
     let tarjeta = null;
-    if (reply.includes("Supernova 18")) tarjeta = productos["Supernova 18"];
-    else if (reply.includes("Supernova 20")) tarjeta = productos["Supernova 20"];
+    if (reply.includes("Supernova 18")) {
+      tarjeta = {
+        nombre: "Supernova 18",
+        precio: "999€",
+        url: "https://www.zoombikes.es/supernova-18",
+        imagen: "https://cdn.prod.website-files.com/67bf93ba4c3b33d64e3d383c/6834513dc55b8043121c3e71_fc9acf18-47e0-4a38-9603-100ca7a8ab6b%20(1).png",
+        scale: 0.85
+      };
+    } else if (reply.includes("Supernova 20")) {
+      tarjeta = {
+        nombre: "Supernova 20",
+        precio: "1299€",
+        url: "https://www.zoombikes.es/supernova-20",
+        imagen: "https://cdn.prod.website-files.com/67bf93ba4c3b33d64e3d383c/6834513dc55b8043121c3e71_fc9acf18-47e0-4a38-9603-100ca7a8ab6b%20(1).png",
+        scale: 1
+      };
+    }
 
     conversations[sessionId].push({ role: 'assistant', content: reply });
 
@@ -92,6 +113,25 @@ app.post('/chat', async (req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Error en OpenAI' });
+  }
+});
+
+app.post('/chat/end', async (req, res) => {
+  const { sessionId, conversation } = req.body;
+  if (!sessionId || !conversation) return res.status(400).send("Faltan datos");
+
+  try {
+    const textoConversacion = conversation
+      .map(m => `${m.role === 'user' ? 'Usuario' : 'Bot'}: ${m.content}`)
+      .join('\n');
+
+    await enviarEmail(textoConversacion, "Conversación completa chatbot Supernova");
+
+    delete conversations[sessionId];
+
+    res.send("Email con conversación completa enviado");
+  } catch (error) {
+    res.status(500).send("Error enviando email");
   }
 });
 
