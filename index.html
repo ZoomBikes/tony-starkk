@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Chatbot Tony Stark</title>
+<style>
+  body {
+    background: #121212;
+    color: #eee;
+    font-family: Arial, sans-serif;
+    display: flex;
+    justify-content: center;
+    margin-top: 40px;
+  }
+  #chat-container {
+    width: 350px;
+    background: #222;
+    border-radius: 8px;
+    padding: 15px;
+    box-shadow: 0 0 15px #e37222;
+  }
+  #chat-messages {
+    height: 300px;
+    overflow-y: auto;
+    border: 1px solid #444;
+    padding: 10px;
+    border-radius: 4px;
+    margin-bottom: 10px;
+    background: #111;
+  }
+  .message {
+    margin-bottom: 12px;
+  }
+  .user {
+    color: #1abc9c;
+  }
+  .bot {
+    color: #e37222;
+  }
+  #chat-input {
+    width: calc(100% - 60px);
+    padding: 8px;
+    border: none;
+    border-radius: 4px;
+    outline: none;
+  }
+  #send-btn {
+    width: 50px;
+    background: #e37222;
+    border: none;
+    color: #fff;
+    font-weight: bold;
+    cursor: pointer;
+    border-radius: 4px;
+    margin-left: 5px;
+  }
+</style>
+</head>
+<body>
+  <div id="chat-container">
+    <div id="chat-messages"></div>
+    <div style="display:flex;">
+      <input id="chat-input" type="text" placeholder="Escribe tu mensaje..." autofocus />
+      <button id="send-btn">Enviar</button>
+    </div>
+  </div>
+
+  <script>
+    const chatMessages = document.getElementById('chat-messages');
+    const chatInput = document.getElementById('chat-input');
+    const sendBtn = document.getElementById('send-btn');
+
+    async function sendMessage() {
+      const message = chatInput.value.trim();
+      if (!message) return;
+
+      appendMessage('Tú', message, 'user');
+      chatInput.value = '';
+      chatInput.disabled = true;
+      sendBtn.disabled = true;
+
+      try {
+        const res = await fetch('http://localhost:3000/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message })
+        });
+        const data = await res.json();
+        appendMessage('Tony Stark', data.reply, 'bot');
+      } catch (error) {
+        appendMessage('Error', 'No se pudo conectar con el servidor.', 'bot');
+      }
+
+      chatInput.disabled = false;
+      sendBtn.disabled = false;
+      chatInput.focus();
+    }
+
+    function appendMessage(sender, text, className) {
+      const msgDiv = document.createElement('div');
+      msgDiv.classList.add('message', className);
+      msgDiv.innerHTML = `<strong>${sender}:</strong> ${text}`;
+      chatMessages.appendChild(msgDiv);
+      chatMessages.scrollTop = chatMessages.scrollHeight;
+    }
+
+    sendBtn.addEventListener('click', sendMessage);
+    chatInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') sendMessage();
+    });
+  </script>
+</body>
+</html>
