@@ -13,10 +13,24 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-// Guardar contexto por sesión o usuario (aquí un ejemplo muy simple con memoria global)
-const conversations = {}; // { sessionId: [ {role, content}, ... ] }
+// Productos con datos y escala para imagen
+const productos = {
+  "Supernova 18": {
+    nombre: "Supernova 18",
+    precio: "999€",
+    url: "https://www.zoombikes.es/supernova-18",
+    imagen: "https://cdn.prod.website-files.com/67bf93ba4c3b33d64e3d383c/6834513dc55b8043121c3e71_fc9acf18-47e0-4a38-9603-100ca7a8ab6b%20(1).png",
+    scale: 0.85
+  },
+  "Supernova 20": {
+    nombre: "Supernova 20",
+    precio: "1299€",
+    url: "https://www.zoombikes.es/supernova-20",
+    imagen: "https://cdn.prod.website-files.com/67bf93ba4c3b33d64e3d383c/6834513dc55b8043121c3e71_fc9acf18-47e0-4a38-9603-100ca7a8ab6b%20(1).png",
+    scale: 1
+  }
+};
 
-// Prompt fijo de sistema con el contexto ZoomBikes Supernova
 const SYSTEM_PROMPT = `Eres un asistente experto en bicicletas eléctricas infantiles de la marca ZoomBikes, específicamente en el modelo Supernova. Solo respondes preguntas relacionadas con las bicicletas Supernova, sus características técnicas, tamaños, precios, formas de pago, garantía, envíos y devoluciones.
 
 Las bicicletas Supernova son eléctricas sin pedales, diseñadas para niños y niñas que quieren divertirse y ganar autonomía. Hay dos tamaños:
@@ -40,7 +54,8 @@ Si alguien pregunta algo fuera de estos temas, responde amablemente que solo pue
 
 Responde con claridad, precisión y un tono cercano, amigable y profesional.`;
 
-// Limite máximo de mensajes en contexto
+// Memoria simple de conversaciones por sesión
+const conversations = {};
 const MAX_MESSAGES = 10;
 
 app.post('/chat', async (req, res) => {
@@ -52,13 +67,10 @@ app.post('/chat', async (req, res) => {
     conversations[sessionId] = [{ role: 'system', content: SYSTEM_PROMPT }];
   }
 
-  // Añadir el nuevo mensaje del usuario
   conversations[sessionId].push({ role: 'user', content: message });
 
-  // Limitar el tamaño del contexto
   if (conversations[sessionId].length > MAX_MESSAGES) {
-    // Mantener el prompt de sistema y los últimos MAX_MESSAGES-1 mensajes
-    conversations[sessionId] = [conversations[sessionId][0], ...conversations[sessionId].slice(- (MAX_MESSAGES - 1))];
+    conversations[sessionId] = [conversations[sessionId][0], ...conversations[sessionId].slice(-(MAX_MESSAGES - 1))];
   }
 
   try {
@@ -67,12 +79,16 @@ app.post('/chat', async (req, res) => {
       messages: conversations[sessionId],
     });
 
-    const reply = completion.choices[0].message.content;
+    let reply = completion.choices[0].message.content;
 
-    // Guardar respuesta del asistente en el contexto
+    // Detectar si menciona Supernova 18 o 20 para enviar tarjeta
+    let tarjeta = null;
+    if (reply.includes("Supernova 18")) tarjeta = productos["Supernova 18"];
+    else if (reply.includes("Supernova 20")) tarjeta = productos["Supernova 20"];
+
     conversations[sessionId].push({ role: 'assistant', content: reply });
 
-    res.json({ reply });
+    res.json({ reply, tarjeta });
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Error en OpenAI' });
