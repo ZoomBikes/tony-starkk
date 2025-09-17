@@ -1,5 +1,6 @@
-// server.js — ZoomBikes API (Railway)
-// Arreglos: CORS multi-origen + preflight, prompt íntegro, streaming, email opcional.
+// server.js — ZoomBikes API (Railway, Express 5)
+// Fix: quitar app.options('*', …) que rompe path-to-regexp en Express 5.
+// CORS multi-origen estable, prompt íntegro, streaming, email opcional.
 
 import 'dotenv/config';
 import express from 'express';
@@ -14,8 +15,8 @@ const {
   PORT = process.env.PORT || 8080,
   NODE_ENV = 'production',
   OPENAI_API_KEY,
-  // Usa WEB_ORIGINS con varios orígenes separados por comas.
-  // Ej: WEB_ORIGINS=https://www.zoombikes.es,https://zoombikes.es,https://preview.webflow.com
+  // WEB_ORIGINS: lista separada por comas con los dominios que te llaman
+  // Ej.: https://www.zoombikes.es,https://zoombikes.es,https://preview.webflow.com
   WEB_ORIGINS = '',
   SMTP_HOST,
   SMTP_PORT,
@@ -24,16 +25,14 @@ const {
   EMAIL_TO,
 } = process.env;
 
-if (!OPENAI_API_KEY) {
-  console.warn('[WARN] Falta OPENAI_API_KEY en .env');
-}
+if (!OPENAI_API_KEY) console.warn('[WARN] Falta OPENAI_API_KEY');
 
 const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 
 app.set('trust proxy', 1);
 app.use(express.json({ limit: '1mb' }));
 
-// ---------- CORS sólido (multi-origen + preflight) ----------
+// ---------- CORS estable (sin wildcard routes) ----------
 const defaultAllowed = [
   'http://localhost:3000',
   'http://localhost:5500',
@@ -46,21 +45,16 @@ app.use((req, res, next) => { res.setHeader('Vary', 'Origin'); next(); });
 
 app.use(cors({
   origin: (origin, cb) => {
-    // Permite peticiones sin header Origin (curl/SSR)
+    // Permite llamadas sin Origin (curl/SSR)
     if (!origin) return cb(null, true);
     if (allowedOrigins.has(origin)) return cb(null, true);
     return cb(new Error('CORS not allowed: ' + origin));
   },
-  methods: ['GET', 'POST', 'OPTIONS'],
+  methods: ['GET', 'POST'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: false,
 }));
-
-app.options('*', (req, res) => {
-  const origin = req.headers.origin;
-  if (!origin || allowedOrigins.has(origin)) return res.sendStatus(204);
-  return res.sendStatus(403);
-});
+// Nota: NO usamos app.options('*') ni rutas wildcard; cors maneja preflight internamente.
 
 // ---------- Rate limit simple ----------
 const hits = new Map();
