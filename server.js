@@ -1,5 +1,6 @@
-// server.js
-// ZoomBikes — API Chat + Email (Railway ready)
+// server.js — ZoomBikes API (Railway)
+// Arreglos: CORS multi-origen + preflight, prompt íntegro, streaming, email opcional.
+
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
@@ -10,15 +11,17 @@ const app = express();
 
 // ---------- Config ----------
 const {
-  PORT = 3000,
+  PORT = process.env.PORT || 8080,
   NODE_ENV = 'production',
   OPENAI_API_KEY,
-  WEB_ORIGIN,            // p.ej. https://www.zoombikes.es (tu Webflow)
+  // Usa WEB_ORIGINS con varios orígenes separados por comas.
+  // Ej: WEB_ORIGINS=https://www.zoombikes.es,https://zoombikes.es,https://preview.webflow.com
+  WEB_ORIGINS = '',
   SMTP_HOST,
   SMTP_PORT,
   SMTP_USER,
   SMTP_PASS,
-  EMAIL_TO,              // destino para el resumen de conversación
+  EMAIL_TO,
 } = process.env;
 
 if (!OPENAI_API_KEY) {
@@ -27,27 +30,41 @@ if (!OPENAI_API_KEY) {
 
 const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 
-// CORS: permite tu Webflow/zoombikes; en dev permite localhost
-const allowedOrigins = new Set(
-  [WEB_ORIGIN, 'http://localhost:3000', 'http://localhost:5500', 'http://127.0.0.1:5500']
-    .filter(Boolean)
-);
-app.use(cors({
-  origin: (origin, cb) => {
-    // SSR/no-origin (embeds) => permitir
-    if (!origin || allowedOrigins.has(origin)) return cb(null, true);
-    return cb(new Error('CORS not allowed: ' + origin));
-  },
-  credentials: false,
-}));
+app.set('trust proxy', 1);
 app.use(express.json({ limit: '1mb' }));
 
-// Proxy trust (Railway/Cloud)
-app.set('trust proxy', 1);
+// ---------- CORS sólido (multi-origen + preflight) ----------
+const defaultAllowed = [
+  'http://localhost:3000',
+  'http://localhost:5500',
+  'http://127.0.0.1:5500',
+];
+const envAllowed = WEB_ORIGINS.split(',').map(s => s.trim()).filter(Boolean);
+const allowedOrigins = new Set([...defaultAllowed, ...envAllowed]);
 
-// ---------- Rate limit sencillo (memoria) ----------
+app.use((req, res, next) => { res.setHeader('Vary', 'Origin'); next(); });
+
+app.use(cors({
+  origin: (origin, cb) => {
+    // Permite peticiones sin header Origin (curl/SSR)
+    if (!origin) return cb(null, true);
+    if (allowedOrigins.has(origin)) return cb(null, true);
+    return cb(new Error('CORS not allowed: ' + origin));
+  },
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: false,
+}));
+
+app.options('*', (req, res) => {
+  const origin = req.headers.origin;
+  if (!origin || allowedOrigins.has(origin)) return res.sendStatus(204);
+  return res.sendStatus(403);
+});
+
+// ---------- Rate limit simple ----------
 const hits = new Map();
-setInterval(() => hits.clear(), 60_000); // reset por minuto
+setInterval(() => hits.clear(), 60_000);
 function rateLimit(req, res, next) {
   const ip = req.ip || req.headers['x-forwarded-for'] || 'unknown';
   const n = hits.get(ip) || 0;
@@ -80,19 +97,18 @@ Si alguien pregunta algo fuera de estos temas, responde amablemente que solo pue
 
 Responde con claridad, precisión y un tono cercano, amigable y profesional.`;
 
-// ---------- Utilidades ----------
+// ---------- Utils ----------
 function saneString(v, max = 2000) {
   if (typeof v !== 'string') return '';
   return v.replace(/\u0000/g, '').slice(0, max);
 }
 
 function inferCardFromText(t) {
-  // Heurística simple: detecta mención de 18/20 y sugiere tarjeta
   const txt = (t || '').toLowerCase();
   if (txt.includes('supernova 20') || txt.includes('20”') || txt.includes('20"')) {
     return {
       nombre: 'Zoom Bike 20”',
-      imagen: 'https://www.zoombikes.es/images/supernova-20.png', // ajusta si usas otra ruta
+      imagen: 'https://www.zoombikes.es/images/supernova-20.png',
       precio: '1299 €',
       url: 'https://www.zoombikes.es/product/supernova-20',
       sku: 'supernova-20',
@@ -116,10 +132,8 @@ app.post('/chat', rateLimit, async (req, res) => {
     const { message, sessionId } = req.body || {};
     const userMessage = saneString(message, 2000);
     const sid = saneString(sessionId, 120);
-
     if (!userMessage) return res.status(400).json({ error: 'Mensaje vacío' });
 
-    // Respuesta chunked (compatible con fetch+reader del front)
     res.setHeader('Content-Type', 'text/plain; charset=utf-8');
     res.setHeader('Transfer-Encoding', 'chunked');
 
@@ -136,24 +150,17 @@ app.post('/chat', rateLimit, async (req, res) => {
     let full = '';
     for await (const chunk of stream) {
       const token = chunk.choices?.[0]?.delta?.content || '';
-      if (token) {
-        full += token;
-        res.write(token);
-      }
+      if (token) { full += token; res.write(token); }
     }
 
-    // Adjunta, si aplica, una tarjeta JSON al final (lo consume el front)
     const card = inferCardFromText(full);
     if (card) res.write('\n\n' + JSON.stringify({ tarjeta: card }));
 
     res.end();
   } catch (err) {
     console.error('CHAT ERROR', err);
-    if (!res.headersSent) {
-      res.status(500).json({ error: 'Error generando respuesta' });
-    } else {
-      res.end();
-    }
+    if (!res.headersSent) res.status(500).json({ error: 'Error generando respuesta' });
+    else res.end();
   }
 });
 
@@ -180,9 +187,7 @@ app.post('/chat/end', rateLimit, async (req, res) => {
       <p><b>Session:</b> ${sid || 'N/A'}</p>
       ${email ? `<p><b>Email cliente (opt-in):</b> ${saneString(email, 200)}</p>` : ''}
       <hr/>
-      <ol>
-        ${conv.map(m => `<li><b>${m.role}:</b> ${saneString(m.content, 2000)}</li>`).join('')}
-      </ol>
+      <ol>${conv.map(m => `<li><b>${m.role}:</b> ${saneString(m.content, 2000)}</li>`).join('')}</ol>
     `;
 
     await transporter.sendMail({
