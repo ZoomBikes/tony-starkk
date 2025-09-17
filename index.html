@@ -1,77 +1,124 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Chatbot Supernova</title>
-  <link rel="stylesheet" href="style.css">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Chatbot Supernova - Responsive</title>
+  <style>
+    /* --- estilos originales --- */
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+           background: #121212; color: #fff; }
+    #chat { position: fixed; bottom: 40px; right: 40px; width: 45vw; max-width: 650px; height: 70vh;
+            background: #1e293b; border-radius: 12px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+            display: flex; flex-direction: column; overflow: hidden; z-index: 10000; padding: 20px; }
+    #messages { flex: 1; padding: 20px; overflow-y: auto; scroll-behavior: smooth; background: #0f172a; }
+    .msg { max-width: 85%; padding: 14px 20px; margin-bottom: 14px; border-radius: 18px;
+           line-height: 1.6; font-size: 1.15rem; white-space: pre-wrap; word-wrap: break-word;
+           box-shadow: 0 1px 4px rgba(0,0,0,0.2); }
+    .user { margin-left: auto; background: #2563eb; color: #fff; border-bottom-right-radius: 4px; }
+    .bot { margin-right: auto; background: #475569; color: #fff; border-bottom-left-radius: 4px; }
+    #inputArea { display: flex; gap: 0.5rem; padding: 10px; background: #1e293b;
+                 border-top: 1px solid #334155; }
+    #input { flex: 1; padding: 12px 16px; font-size: 1.1rem; border: none; border-radius: 8px;
+             background: #fff; color: #000; outline: none; }
+    #send, #end { background: #2563eb; border: none; color: #fff; font-weight: 600; font-size: 1.2rem;
+                  padding: 12px 16px; border-radius: 8px; cursor: pointer; transition: background 0.3s ease;
+                  min-width: 48px; }
+    #send:hover, #end:hover { background: #1e40af; }
+    .product-card { margin: 12px 0; border: 1px solid #334155; border-radius: 12px; padding: 10px;
+                    background: #1e293b; text-align: center; box-shadow: 0 2px 8px rgba(0,0,0,0.3); }
+    .product-card img { max-width: 100%; border-radius: 12px; margin-bottom: 8px; transition: transform 0.3s ease; }
+    .product-card:hover img { transform: scale(1.05); }
+    .product-card h4 { margin: 8px 0 4px 0; font-weight: 700; }
+    .product-card p { margin: 0; font-weight: 600; color: #60a5fa; }
+    .product-card a { text-decoration: none; color: inherit; }
+    @media (max-width: 768px) {
+      #chat { width: calc(100% - 2rem); height: 72vh; left: 1rem; right: 1rem; bottom: 1rem;
+              transform: none; border-radius: 16px; padding: 15px; }
+      .msg { max-width: 90%; font-size: 1rem; padding: 12px 16px; }
+      #input { font-size: 1rem; }
+      #send, #end { font-size: 1.1rem; padding: 10px 12px; }
+    }
+  </style>
 </head>
 <body>
-  <div class="chat-container">
+  <div id="chat" role="region" aria-label="Chatbot ZoomBikes Supernova">
     <div id="messages"></div>
-    <div class="input-container">
-      <input type="text" id="input" placeholder="Escribe tu mensaje..." />
-      <button id="send">Enviar</button>
+    <div id="inputArea">
+      <input id="input" aria-label="Escribe tu mensaje" placeholder="Escribe tu mensaje..." autocomplete="off" />
+      <button id="send" aria-label="Enviar mensaje">➤</button>
+      <button id="end" aria-label="Finalizar conversación">✕</button>
     </div>
   </div>
-  <button id="end-chat">Finalizar Chat</button>
+
   <script>
-    const messages = document.getElementById("messages");
-    const input = document.getElementById("input");
-    const sendBtn = document.getElementById("send");
-    const endChatBtn = document.getElementById("end-chat");
+    const messages=document.getElementById('messages');
+    const input=document.getElementById('input');
+    const sendBtn=document.getElementById('send');
+    const endBtn=document.getElementById('end');
 
-    let sessionId = localStorage.getItem("sessionId");
-    if (!sessionId) {
-      sessionId = Math.random().toString(36).substr(2, 9);
-      localStorage.setItem("sessionId", sessionId);
+    let sessionId=localStorage.getItem('sessionId');
+    if(!sessionId){ sessionId='user-'+Math.random().toString(36).substr(2,9);
+                    localStorage.setItem('sessionId',sessionId); }
+
+    let conversationHistory=[];
+
+    function appendMessage(text,sender){
+      const div=document.createElement('div');
+      div.className='msg '+(sender==='user'?'user':'bot');
+      div.textContent=(sender==='user'?'Tú: ':'Bot: ')+text;
+      messages.appendChild(div);
+      messages.scrollTop=messages.scrollHeight;
     }
 
-    function addMessage(text, sender = "bot") {
-      const msg = document.createElement("div");
-      msg.classList.add("message", sender);
-      msg.innerHTML = text;
-      messages.appendChild(msg);
-      messages.scrollTop = messages.scrollHeight;
+    async function sendMessage(){
+      const message=input.value.trim(); if(!message) return;
+      appendMessage(message,'user');
+      conversationHistory.push({role:'user',content:message});
+      input.value=''; input.disabled=true; sendBtn.disabled=true;
+      try{
+        const res=await fetch('http://localhost:3000/chat',{
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({message,sessionId})
+        });
+        const data=await res.json();
+        appendMessage(data.reply,'bot');
+        conversationHistory.push({role:'assistant',content:data.reply});
+        if(data.tarjeta){
+          const scaleStyle=`transform: scale(${data.tarjeta.scale}); display:inline-block;`;
+          const cardHtml=`
+            <div class="product-card">
+              <a href="${data.tarjeta.url}" target="_blank" rel="noopener noreferrer">
+                <img src="${data.tarjeta.imagen}" alt="${data.tarjeta.nombre}" style="${scaleStyle}">
+                <h4>${data.tarjeta.nombre}</h4>
+                <p>Precio: ${data.tarjeta.precio}</p>
+              </a>
+            </div>`;
+          messages.innerHTML+=cardHtml;
+          messages.scrollTop=messages.scrollHeight;
+        }
+      }catch(e){ appendMessage('Error al conectar con el servidor.','bot'); }
+      input.disabled=false; sendBtn.disabled=false; input.focus();
     }
 
-    sendBtn.addEventListener("click", async () => {
-      const text = input.value.trim();
-      if (!text) return;
-      addMessage(text, "user");
-      input.value = "";
+    async function endConversation(){
+      if(conversationHistory.length===0) return;
+      try{
+        await fetch('http://localhost:3000/chat/end',{
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({sessionId,conversation:conversationHistory})
+        });
+        appendMessage('Conversación finalizada y enviada por email.','bot');
+        conversationHistory=[];
+      }catch(e){ appendMessage('Error al enviar el email.','bot'); }
+    }
 
-      const res = await fetch("http://localhost:3000/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text, sessionId }),
-      });
-      const data = await res.json();
-      addMessage(data.reply);
-
-      if (data.tarjeta) {
-        const cardHtml = `
-          <div class="card">
-            <img src="${data.tarjeta.imagen}" alt="${data.tarjeta.nombre}" />
-            <h4>${data.tarjeta.nombre}</h4>
-            <p>${data.tarjeta.precio}</p>
-            <a href="${data.tarjeta.url}" target="_blank">Ver más</a>
-          </div>`;
-        messages.innerHTML += cardHtml;
-        messages.scrollTop = messages.scrollHeight;
-      }
-    });
-
-    endChatBtn.addEventListener("click", async () => {
-      const res = await fetch("http://localhost:3000/chat/end", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sessionId }),
-      });
-      if (res.ok) {
-        alert("Conversación finalizada y enviada por email.");
-      }
-    });
+    sendBtn.onclick=sendMessage;
+    endBtn.onclick=endConversation;
+    input.addEventListener('keydown',e=>{ if(e.key==='Enter') sendMessage(); });
   </script>
 </body>
 </html>
