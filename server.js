@@ -1,73 +1,22 @@
-// server.js — ZoomBikes API (Railway, Express 5)
-// Fix: quitar app.options('*', …) que rompe path-to-regexp en Express 5.
-// CORS multi-origen estable, prompt íntegro, streaming, email opcional.
+import express from "express";
+import cors from "cors";
+import bodyParser from "body-parser";
+import nodemailer from "nodemailer";
+import OpenAI from "openai";
+import dotenv from "dotenv";
 
-import 'dotenv/config';
-import express from 'express';
-import cors from 'cors';
-import nodemailer from 'nodemailer';
-import OpenAI from 'openai';
+dotenv.config();
 
 const app = express();
+const port = process.env.PORT || 3000;
 
-// ---------- Config ----------
-const {
-  PORT = process.env.PORT || 8080,
-  NODE_ENV = 'production',
-  OPENAI_API_KEY,
-  // WEB_ORIGINS: lista separada por comas con los dominios que te llaman
-  // Ej.: https://www.zoombikes.es,https://zoombikes.es,https://preview.webflow.com
-  WEB_ORIGINS = '',
-  SMTP_HOST,
-  SMTP_PORT,
-  SMTP_USER,
-  SMTP_PASS,
-  EMAIL_TO,
-} = process.env;
+app.use(cors());
+app.use(bodyParser.json());
 
-if (!OPENAI_API_KEY) console.warn('[WARN] Falta OPENAI_API_KEY');
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
 
-const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
-
-app.set('trust proxy', 1);
-app.use(express.json({ limit: '1mb' }));
-
-// ---------- CORS estable (sin wildcard routes) ----------
-const defaultAllowed = [
-  'http://localhost:3000',
-  'http://localhost:5500',
-  'http://127.0.0.1:5500',
-];
-const envAllowed = WEB_ORIGINS.split(',').map(s => s.trim()).filter(Boolean);
-const allowedOrigins = new Set([...defaultAllowed, ...envAllowed]);
-
-app.use((req, res, next) => { res.setHeader('Vary', 'Origin'); next(); });
-
-app.use(cors({
-  origin: (origin, cb) => {
-    // Permite llamadas sin Origin (curl/SSR)
-    if (!origin) return cb(null, true);
-    if (allowedOrigins.has(origin)) return cb(null, true);
-    return cb(new Error('CORS not allowed: ' + origin));
-  },
-  methods: ['GET', 'POST'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-  credentials: false,
-}));
-// Nota: NO usamos app.options('*') ni rutas wildcard; cors maneja preflight internamente.
-
-// ---------- Rate limit simple ----------
-const hits = new Map();
-setInterval(() => hits.clear(), 60_000);
-function rateLimit(req, res, next) {
-  const ip = req.ip || req.headers['x-forwarded-for'] || 'unknown';
-  const n = hits.get(ip) || 0;
-  if (n > 60) return res.status(429).json({ error: 'Too many requests' });
-  hits.set(ip, n + 1);
-  next();
-}
-
-// ---------- Prompt del sistema (tuyo, íntegro) ----------
 const SYSTEM_PROMPT = `Eres un asistente experto en bicicletas eléctricas infantiles de la marca ZoomBikes, específicamente en el modelo Supernova. Solo respondes preguntas relacionadas con las bicicletas Supernova, sus características técnicas, tamaños, precios, formas de pago, garantía, envíos y devoluciones.
 
 Las bicicletas Supernova son eléctricas sin pedales, diseñadas para niños y niñas que quieren divertirse y ganar autonomía. Hay dos tamaños:
@@ -91,117 +40,76 @@ Si alguien pregunta algo fuera de estos temas, responde amablemente que solo pue
 
 Responde con claridad, precisión y un tono cercano, amigable y profesional.`;
 
-// ---------- Utils ----------
-function saneString(v, max = 2000) {
-  if (typeof v !== 'string') return '';
-  return v.replace(/\u0000/g, '').slice(0, max);
-}
+app.post("/chat", async (req, res) => {
+  const { message } = req.body;
 
-function inferCardFromText(t) {
-  const txt = (t || '').toLowerCase();
-  if (txt.includes('supernova 20') || txt.includes('20”') || txt.includes('20"')) {
-    return {
-      nombre: 'Zoom Bike 20”',
-      imagen: 'https://www.zoombikes.es/images/supernova-20.png',
-      precio: '1299 €',
-      url: 'https://www.zoombikes.es/product/supernova-20',
-      sku: 'supernova-20',
-    };
+  if (!message) {
+    return res.status(400).json({ error: "Mensaje vacío" });
   }
-  if (txt.includes('supernova 18') || txt.includes('18”') || txt.includes('18"')) {
-    return {
-      nombre: 'Zoom Bike 18”',
-      imagen: 'https://www.zoombikes.es/images/supernova-18.png',
-      precio: '999 €',
-      url: 'https://www.zoombikes.es/product/supernova-18',
-      sku: 'supernova-18',
-    };
-  }
-  return null;
-}
 
-// ---------- Chat (streaming por HTTP chunked) ----------
-app.post('/chat', rateLimit, async (req, res) => {
   try {
-    const { message, sessionId } = req.body || {};
-    const userMessage = saneString(message, 2000);
-    const sid = saneString(sessionId, 120);
-    if (!userMessage) return res.status(400).json({ error: 'Mensaje vacío' });
-
-    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-    res.setHeader('Transfer-Encoding', 'chunked');
-
-    const stream = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      temperature: 0.6,
-      stream: true,
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
       messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'user', content: userMessage },
+        { role: "system", content: SYSTEM_PROMPT },
+        { role: "user", content: message },
       ],
     });
 
-    let full = '';
-    for await (const chunk of stream) {
-      const token = chunk.choices?.[0]?.delta?.content || '';
-      if (token) { full += token; res.write(token); }
+    const reply = completion.choices[0].message.content;
+
+    let tarjeta = null;
+    if (message.toLowerCase().includes("supernova 20")) {
+      tarjeta = {
+        nombre: "Zoom Bike 20”",
+        imagen: "https://www.zoombikes.es/images/supernova-20.png",
+        precio: "1299 €",
+        url: "https://www.zoombikes.es/product/supernova-20",
+      };
+    } else if (message.toLowerCase().includes("supernova 18")) {
+      tarjeta = {
+        nombre: "Zoom Bike 18”",
+        imagen: "https://www.zoombikes.es/images/supernova-18.png",
+        precio: "999 €",
+        url: "https://www.zoombikes.es/product/supernova-18",
+      };
     }
 
-    const card = inferCardFromText(full);
-    if (card) res.write('\n\n' + JSON.stringify({ tarjeta: card }));
-
-    res.end();
+    res.json({ reply, tarjeta });
   } catch (err) {
-    console.error('CHAT ERROR', err);
-    if (!res.headersSent) res.status(500).json({ error: 'Error generando respuesta' });
-    else res.end();
+    console.error("Error en /chat:", err);
+    res.status(500).json({ error: "Error procesando el chat" });
   }
 });
 
-// ---------- Fin de conversación (email opcional con opt-in) ----------
-app.post('/chat/end', rateLimit, async (req, res) => {
+app.post("/chat/end", async (req, res) => {
+  const { sessionId } = req.body;
+
   try {
-    const { sessionId, conversation, email } = req.body || {};
-    const sid = saneString(sessionId, 120);
-    const conv = Array.isArray(conversation) ? conversation.slice(0, 100) : [];
-
-    if (!SMTP_HOST || !SMTP_USER || !SMTP_PASS || !EMAIL_TO) {
-      return res.status(200).json({ ok: true, note: 'Email desactivado (falta configuración SMTP)' });
-    }
-
     const transporter = nodemailer.createTransport({
-      host: SMTP_HOST,
-      port: Number(SMTP_PORT || 587),
-      secure: Number(SMTP_PORT || 587) === 465,
-      auth: { user: SMTP_USER, pass: SMTP_PASS },
+      host: process.env.SMTP_HOST,
+      port: process.env.SMTP_PORT,
+      secure: false,
+      auth: {
+        user: process.env.SMTP_USER,
+        pass: process.env.SMTP_PASS,
+      },
     });
-
-    const html = `
-      <h2>ZoomBikes · Conversación</h2>
-      <p><b>Session:</b> ${sid || 'N/A'}</p>
-      ${email ? `<p><b>Email cliente (opt-in):</b> ${saneString(email, 200)}</p>` : ''}
-      <hr/>
-      <ol>${conv.map(m => `<li><b>${m.role}:</b> ${saneString(m.content, 2000)}</li>`).join('')}</ol>
-    `;
 
     await transporter.sendMail({
-      from: `ZoomBikes Bot <${SMTP_USER}>`,
-      to: EMAIL_TO,
-      subject: `Chat ZoomBikes — ${sid || 'sin-session'}`,
-      html,
+      from: `"ZoomBot" <${process.env.SMTP_USER}>`,
+      to: process.env.EMAIL_TO,
+      subject: "Fin de conversación ZoomBot",
+      text: `El usuario con sessionId ${sessionId} ha finalizado la conversación.`,
     });
 
-    res.json({ ok: true });
+    res.status(200).json({ success: true });
   } catch (err) {
-    console.error('MAIL ERROR', err);
-    res.status(500).json({ error: 'No se pudo enviar el email' });
+    console.error("Error enviando email:", err);
+    res.status(500).json({ error: "No se pudo enviar el email" });
   }
 });
 
-// ---------- Salud ----------
-app.get('/health', (_, res) => res.json({ ok: true }));
-
-// ---------- Arranque ----------
-app.listen(PORT, () => {
-  console.log(`ZoomBikes API ready on :${PORT} (${NODE_ENV})`);
+app.listen(port, () => {
+  console.log(`Servidor ZoomBot escuchando en http://localhost:${port}`);
 });
